@@ -218,6 +218,78 @@ export const useRefreshUnreconciledTransactions = () => {
 
 }
 
+/**
+ * Auto-reconcile unreconciled transactions whose top voucher is a "Complete Match"
+ * (amount matches exactly AND reference number matches the transaction's reference
+ * number or description exactly) - the same definition used for the Complete Match
+ * badge on each voucher card. Transactions with no, or more than one, Complete Match
+ * are left for manual reconciliation.
+ */
+export const useAutoReconcileCompleteMatches = () => {
+
+    const bankAccount = useAtomValue(selectedBankAccountAtom)
+    const dates = useAtomValue(bankRecDateAtom)
+
+    const { call, loading } = useFrappePostCall<{
+        message: {
+            reconciled: {
+                bank_transaction: string
+                voucher_doctype: string
+                voucher_name: string
+                amount: number
+            }[]
+            skipped: {
+                bank_transaction: string
+                reason: string
+            }[]
+            reconciled_count: number
+            skipped_count: number
+        }
+    }>('mint.apis.bank_reconciliation.auto_reconcile_complete_matches')
+
+    const { mutate } = useSWRConfig()
+
+    const autoReconcileCompleteMatches = () => {
+
+        return call({
+            bank_account: bankAccount?.name,
+            from_date: dates.fromDate,
+            to_date: dates.toDate,
+        }).then((res) => {
+
+            const result = res.message
+
+            mutate(`bank-reconciliation-unreconciled-transactions-${bankAccount?.name}-${dates.fromDate}-${dates.toDate}`)
+            mutate(`bank-reconciliation-account-closing-balance-${bankAccount?.name}-${dates.toDate}`)
+
+            if (result.reconciled_count > 0) {
+                toast.success(_("Auto Reconciliation Completed"), {
+                    duration: 5000,
+                    description: _("{0} transaction(s) reconciled via Complete Match.", [result.reconciled_count.toString()]),
+                })
+            } else {
+                toast.info(_("No Transactions Reconciled"), {
+                    duration: 5000,
+                    description: _("No unambiguous Complete Matches were found."),
+                })
+            }
+
+            return result
+
+        }).catch((error) => {
+            console.error(error)
+            toast.error(_("Auto Reconciliation Failed"), {
+                duration: 5000,
+                description: getErrorMessage(error)
+            })
+            throw error
+        })
+    }
+
+    return { autoReconcileCompleteMatches, loading }
+
+}
+
 export const useReconcileTransaction = () => {
 
     const { call, loading } = useFrappePostCall<{ message: BankTransaction }>('mint.apis.bank_reconciliation.reconcile_vouchers')

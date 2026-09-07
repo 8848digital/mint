@@ -2,9 +2,11 @@ import frappe
 from frappe import _
 import json
 import datetime
-from erpnext.accounts.doctype.bank_reconciliation_tool.bank_reconciliation_tool import create_payment_entry_bts, create_journal_entry_bts
+from erpnext.accounts.doctype.bank_reconciliation_tool.bank_reconciliation_tool import create_payment_entry_bts, create_journal_entry_bts, subtract_allocations
 from erpnext.accounts.party import get_party_account
 from erpnext import get_default_cost_center
+from frappe.query_builder.functions import Sum
+from frappe.query_builder.custom import ConstantColumn
 
 @frappe.whitelist()
 def clear_clearing_date(voucher_type: str, voucher_name: str):
@@ -47,6 +49,188 @@ def reconcile_vouchers(bank_transaction_name: str | int, vouchers: str, is_new_v
     transaction.save()
     
     return transaction
+
+def _get_complete_match_candidates(gl_account: str, is_withdrawal: bool, from_date, to_date):
+    """
+        Bulk-fetch every Payment Entry / Journal Entry that could match a bank
+        transaction against `gl_account`, for one transaction direction, in a
+        constant number of queries - mirrors erpnext's get_pe_matching_query /
+        get_je_matching_query (same filters, same fields), just fetched once per
+        (bank account, direction) instead of once per bank transaction.
+    """
+    payment_type = "Pay" if is_withdrawal else "Receive"
+    account_from_to = "paid_from" if is_withdrawal else "paid_to"
+
+    pe = frappe.qb.DocType("Payment Entry")
+    pe_query = (
+        frappe.qb.from_(pe)
+        .select(
+            ConstantColumn("Payment Entry").as_("doctype"),
+            pe.name,
+            pe.base_paid_amount_after_tax.as_("paid_amount"),
+            pe.reference_no,
+        )
+        .where(pe.docstatus == 1)
+        .where(pe.payment_type.isin([payment_type, "Internal Transfer"]))
+        .where(pe.clearance_date.isnull())
+        .where(getattr(pe, account_from_to) == gl_account)
+        .where(pe.paid_amount > 0)
+    )
+    if from_date and to_date:
+        pe_query = pe_query.where(pe.posting_date.between(from_date, to_date))
+
+    je = frappe.qb.DocType("Journal Entry")
+    jea = frappe.qb.DocType("Journal Entry Account")
+    amount_field = "credit_in_account_currency" if is_withdrawal else "debit_in_account_currency"
+    je_query = (
+        frappe.qb.from_(jea)
+        .join(je)
+        .on(jea.parent == je.name)
+        .select(
+            ConstantColumn("Journal Entry").as_("doctype"),
+            je.name,
+            Sum(getattr(jea, amount_field)).as_("paid_amount"),
+            je.cheque_no.as_("reference_no"),
+        )
+        .where(je.docstatus == 1)
+        .where(je.voucher_type != "Opening Entry")
+        .where(je.clearance_date.isnull())
+        .where(jea.account == gl_account)
+        .groupby(je.name)
+    )
+    if from_date and to_date:
+        je_query = je_query.where(je.posting_date.between(from_date, to_date))
+
+    candidates = pe_query.run(as_dict=True) + je_query.run(as_dict=True)
+    candidates = [c for c in candidates if (c.get("paid_amount") or 0) > 0]
+
+    return subtract_allocations(gl_account, candidates)
+
+
+@frappe.whitelist(methods=["POST"])
+def auto_reconcile_complete_matches(bank_account: str = None, from_date: str = None, to_date: str = None):
+    """
+        Auto-reconcile unreconciled Bank Transactions, but only when a voucher is a
+        "Complete Match" - the same definition the reconciliation screen already shows
+        on each voucher card:
+
+            - the voucher's amount exactly equals the transaction's unallocated amount
+            - AND the voucher's reference number exactly equals the transaction's
+              reference number OR its description
+
+        A transaction is left untouched (for manual reconciliation) if no voucher is a
+        Complete Match, or if more than one voucher is - ambiguous matches are never
+        auto-reconciled.
+
+        Candidate vouchers are fetched once per (bank account, withdrawal/deposit)
+        combination rather than once per bank transaction, so this scales with the
+        number of distinct bank accounts involved rather than the number of
+        unreconciled transactions.
+    """
+    filters = {
+        "docstatus": 1,
+        "status": "Unreconciled",
+        "unallocated_amount": [">", 0.0],
+    }
+
+    if bank_account:
+        filters["bank_account"] = bank_account
+
+    if from_date and to_date:
+        filters["date"] = ["between", [from_date, to_date]]
+    elif from_date:
+        filters["date"] = [">=", from_date]
+    elif to_date:
+        filters["date"] = ["<=", to_date]
+
+    transactions = frappe.get_all(
+        "Bank Transaction",
+        filters=filters,
+        fields=["name", "reference_number", "description", "unallocated_amount", "date", "bank_account", "withdrawal", "deposit"],
+        order_by="date asc",
+    )
+
+    reconciled = []
+    skipped = []
+
+    # Candidate vouchers, keyed by (bank_account, is_withdrawal) - fetched lazily, once per key.
+    candidates_by_key = {}
+
+    for transaction in transactions:
+        is_withdrawal = (transaction.withdrawal or 0) > 0
+        key = (transaction.bank_account, is_withdrawal)
+
+        if key not in candidates_by_key:
+            try:
+                gl_account = frappe.get_cached_value("Bank Account", transaction.bank_account, "account")
+                candidates_by_key[key] = _get_complete_match_candidates(gl_account, is_withdrawal, from_date, to_date)
+            except Exception:
+                frappe.log_error(title="Mint Auto Reconciliation Error", message=frappe.get_traceback())
+                candidates_by_key[key] = []
+
+        complete_matches = [
+            voucher for voucher in candidates_by_key[key]
+            if voucher.get("paid_amount") == transaction.unallocated_amount
+            and voucher.get("reference_no")
+            and (
+                voucher.get("reference_no") == transaction.reference_number
+                or voucher.get("reference_no") == transaction.description
+            )
+        ]
+
+        if len(complete_matches) == 0:
+            skipped.append({
+                "bank_transaction": transaction.name,
+                "reason": "No Complete Match found",
+            })
+            continue
+
+        if len(complete_matches) > 1:
+            skipped.append({
+                "bank_transaction": transaction.name,
+                "reason": "Multiple Complete Matches found",
+                "candidates": [
+                    {"doctype": voucher["doctype"], "name": voucher["name"]}
+                    for voucher in complete_matches
+                ],
+            })
+            continue
+
+        match = complete_matches[0]
+
+        try:
+            reconcile_vouchers(transaction.name, json.dumps([{
+                "payment_doctype": match["doctype"],
+                "payment_name": match["name"],
+                "amount": match["paid_amount"],
+            }]), is_new_voucher=False)
+
+            reconciled.append({
+                "bank_transaction": transaction.name,
+                "voucher_doctype": match["doctype"],
+                "voucher_name": match["name"],
+                "amount": match["paid_amount"],
+            })
+
+            # This voucher is now used up - zero it out so a later transaction in this
+            # same batch can't also treat it as a Complete Match against a stale amount.
+            match["paid_amount"] = 0
+        except Exception as e:
+            frappe.log_error(title="Mint Auto Reconciliation Error", message=frappe.get_traceback())
+            skipped.append({
+                "bank_transaction": transaction.name,
+                "voucher_doctype": match["doctype"],
+                "voucher_name": match["name"],
+                "reason": str(e),
+            })
+
+    return {
+        "reconciled": reconciled,
+        "skipped": skipped,
+        "reconciled_count": len(reconciled),
+        "skipped_count": len(skipped),
+    }
+
 
 @frappe.whitelist()
 def unreconcile_transaction(transaction_name: str | int):
