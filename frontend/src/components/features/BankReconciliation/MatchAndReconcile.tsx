@@ -25,12 +25,10 @@ import _ from "@/lib/translate"
 import TransferModal from "./TransferModal"
 import BankEntryModal from "./BankEntryModal"
 import RecordPaymentModal from "./RecordPaymentModal"
-import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import SelectedTransactionsTable from "./SelectedTransactionsTable"
 import MatchFilters from "./MatchFilters"
 import { useHotkeys } from "react-hotkeys-hook"
-import { KeyboardMetaKeyIcon } from "@/components/ui/keyboard-keys"
-import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { useFrappeGetCall } from "frappe-react-sdk"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import { Link } from "react-router"
@@ -383,8 +381,6 @@ const useKeyboardShortcuts = () => {
 
 const OptionsForMultipleTransactions = ({ transactions }: { transactions: UnreconciledTransaction[] }) => {
 
-    const { setTransferModalOpen, setRecordPaymentModalOpen, setRecordJournalEntryModalOpen } = useKeyboardShortcuts()
-
     return <div className="flex flex-col py-4">
         <Card className="gap-2">
             <CardHeader>
@@ -399,71 +395,6 @@ const OptionsForMultipleTransactions = ({ transactions }: { transactions: Unreco
             </CardHeader>
             <CardContent>
                 <SelectedTransactionsTable />
-
-                <CardAction className="mt-4">
-                    <div className="flex gap-3 justify-center">
-
-                        <TooltipProvider>
-                            <div className="flex gap-4 justify-center">
-                                <Tooltip>
-                                    <TooltipTrigger asChild>
-                                        <Button
-                                            size='lg'
-                                            aria-label={_("Record a bank journal entry for expenses, income or split transactions")}
-                                            onClick={() => setRecordJournalEntryModalOpen(true)}>
-                                            <Landmark /> {_("Bank Entry")}
-                                        </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                        {_("Record a journal entry for expenses, income or split transactions")}
-                                        <KbdGroup className="ml-2">
-                                            <Kbd><KeyboardMetaKeyIcon /></Kbd>
-                                            <Kbd>B</Kbd>
-                                        </KbdGroup>
-                                    </TooltipContent>
-                                </Tooltip>
-                                <Tooltip>
-                                    <TooltipTrigger asChild>
-                                        <Button
-                                            variant='outline'
-                                            size='lg'
-                                            aria-label={_("Record a payment entry against a customer or supplier")}
-                                            onClick={() => setRecordPaymentModalOpen(true)}>
-                                            <Receipt /> {_("Record Payment")}
-                                        </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                        {_("Record a payment entry against a customer or supplier")}
-                                        <KbdGroup className="ml-2">
-                                            <Kbd><KeyboardMetaKeyIcon /></Kbd>
-                                            <Kbd>P</Kbd>
-                                        </KbdGroup>
-                                    </TooltipContent>
-                                </Tooltip>
-
-                                <Tooltip >
-                                    <TooltipTrigger asChild>
-                                        <Button
-                                            variant='outline'
-                                            size='lg'
-                                            aria-label={_("Record an internal transfer to another bank/credit card/cash account")}
-                                            onClick={() => setTransferModalOpen(true)}>
-                                            <ArrowRightLeft /> {_("Transfer")}
-                                        </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                        {_("Record an internal transfer to another bank/credit card/cash account")}
-                                        <KbdGroup className="ml-2">
-                                            <Kbd><KeyboardMetaKeyIcon /></Kbd>
-                                            <Kbd>I</Kbd>
-                                        </KbdGroup>
-                                    </TooltipContent>
-                                </Tooltip>
-
-                            </div>
-                        </TooltipProvider>
-                    </div>
-                </CardAction>
             </CardContent>
         </Card>
 
@@ -473,67 +404,12 @@ const OptionsForMultipleTransactions = ({ transactions }: { transactions: Unreco
 
 const OptionsForSingleTransaction = ({ transaction, contentHeight }: { transaction: UnreconciledTransaction, contentHeight: number }) => {
 
-    const { setTransferModalOpen, setRecordPaymentModalOpen, setRecordJournalEntryModalOpen } = useKeyboardShortcuts()
+    useKeyboardShortcuts()
 
     return <div className="flex flex-col gap-3">
-        <TooltipProvider>
-            <div className="flex items-center justify-between pt-2">
-                <div className="flex gap-4 justify-center">
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <Button
-                                variant='outline'
-                                aria-label={_("Record a payment entry against a customer or supplier")}
-                                onClick={() => setRecordPaymentModalOpen(true)}>
-                                <Receipt /> {_("Record Payment")}
-                            </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                            {_("Record a payment entry against a customer or supplier")}
-                            <KbdGroup className="ml-2">
-                                <Kbd><KeyboardMetaKeyIcon /></Kbd>
-                                <Kbd>P</Kbd>
-                            </KbdGroup>
-                        </TooltipContent>
-                    </Tooltip>
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <Button
-                                variant='outline'
-                                aria-label={_("Record a bank journal entry for expenses, income or split transactions")}
-                                onClick={() => setRecordJournalEntryModalOpen(true)}>
-                                <Landmark /> {_("Bank Entry")}
-                            </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                            {_("Record a journal entry for expenses, income or split transactions")}
-                            <KbdGroup className="ml-2">
-                                <Kbd><KeyboardMetaKeyIcon /></Kbd>
-                                <Kbd>B</Kbd>
-                            </KbdGroup>
-                        </TooltipContent>
-                    </Tooltip>
-                    <Tooltip >
-                        <TooltipTrigger asChild>
-                            <Button
-                                variant='outline'
-                                aria-label={_("Record an internal transfer to another bank/credit card/cash account")}
-                                onClick={() => setTransferModalOpen(true)}>
-                                <ArrowRightLeft /> {_("Transfer")}
-                            </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                            {_("Record an internal transfer to another bank/credit card/cash account")}
-                            <KbdGroup className="ml-2">
-                                <Kbd><KeyboardMetaKeyIcon /></Kbd>
-                                <Kbd>I</Kbd>
-                            </KbdGroup>
-                        </TooltipContent>
-                    </Tooltip>
-                </div>
-                <MatchFilters />
-            </div>
-        </TooltipProvider>
+        <div className="flex items-center justify-end pt-2">
+            <MatchFilters />
+        </div>
         {transaction.matched_rule && <RuleAction transaction={transaction} />}
         <VouchersForTransaction transaction={transaction} contentHeight={contentHeight} />
     </div>
